@@ -1,0 +1,11 @@
+# Optional: deploy via Render Blueprint (Dashboard → New → Blueprint)
+services:
+  - type: web
+    name: manual-automation-api
+    runtime: docker
+    rootDir: backend
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
