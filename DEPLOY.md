@@ -89,20 +89,40 @@ cd frontend && npm run build && cd .. && firebase deploy --only hosting
 
 ## 4. Backend on Render (Playwright + Docker)
 
+GitHub account: **Tigran-Products**  
+Repository: **https://github.com/Tigran-Products/AutoPilot-QA**
+
 The repo includes `backend/Dockerfile` and `render.yaml`. Render runs Chromium via the official Playwright Docker image.
 
-### Step A — Push code to GitHub (if not already)
+### Step A — Push code to GitHub as Tigran-Products
 
-Render deploys from Git. In your project folder:
+Your Mac may still use cached login for **thayrapetyan**. Push must use **Tigran-Products**.
 
 ```bash
-git init
+cd /Users/thayrapetyan/Documents/Manual-Automation-app
+
+# This repo is configured as Tigran-Products (check with: git config user.name)
+git config user.name
+git config user.email
+
+# Remove old GitHub login from Keychain (press Enter twice after the last line)
+git credential-osxkeychain erase
+host=github.com
+protocol=https
+
+# Push — sign in as Tigran-Products when the browser opens (NOT thayrapetyan)
 git add .
-git commit -m "chore: add Render Docker deploy for backend"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
+git commit -m "chore: add Render Docker deploy for backend"   # skip if already committed
 git push -u origin main
 ```
+
+Remote should already be:
+
+```text
+https://github.com/Tigran-Products/AutoPilot-QA.git
+```
+
+**Personal Access Token:** GitHub → logged in as **Tigran-Products** → Settings → Developer settings → Fine-grained or classic token with **repo** access → use as password if prompted.
 
 ### Step B — Create the web service in Render
 
