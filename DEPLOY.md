@@ -175,6 +175,52 @@ firebase deploy --only hosting
 
 - **Free tier** services sleep after ~15 min idle; first request after sleep can take 30–60s (cold start).
 - If deploy fails with **out of memory**, upgrade instance to **Starter** (512MB+).
+
+---
+
+## 5. Backend on Railway (alternative to Render)
+
+If you see **Railpack** error `Script start.sh not found` — Railway is building the **repo root** instead of `backend/`. There is no `package.json` at the root, only inside `backend/`.
+
+### Fix in Railway dashboard
+
+1. Open your service → **Settings**
+2. Set **Root Directory** to: `backend`
+3. Set **Builder** to: **Dockerfile** (not Railpack / Nixpacks auto-detect)
+4. **Dockerfile path:** `Dockerfile` (relative to `backend/`)
+5. Redeploy
+
+Or use the repo’s root `railway.toml` (already points Docker to `backend/Dockerfile`):
+
+```toml
+dockerfilePath = "backend/Dockerfile"
+```
+
+### Railway settings summary
+
+| Setting | Value |
+|---------|--------|
+| Root Directory | `backend` |
+| Builder | Dockerfile |
+| Health check | `/health` |
+
+### After deploy
+
+Copy Railway URL → `frontend/.env.production`:
+
+```env
+VITE_API_URL=https://YOUR-APP.up.railway.app
+```
+
+Rebuild frontend and `firebase deploy --only hosting`.
+
+Optional env on Railway:
+
+| Variable | Value |
+|----------|--------|
+| `ENABLE_TRACING` | `true` (slower; enables trace zip download) |
+| `PLAYWRIGHT_TIMEOUT` | `15000` |
+| `PLAYWRIGHT_NAV_TIMEOUT` | `45000` |
 - **Traces** are stored on disk; they are lost when the container restarts (fine for demos).
 
 ---
