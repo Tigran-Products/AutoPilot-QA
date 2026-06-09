@@ -3,6 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const { executeSteps } = require('./stepExecutor');
+const { verifyToken } = require('./middleware/auth');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -37,7 +38,7 @@ function cleanOldTraces() {
   }
 }
 
-app.post('/api/run-test', async (req, res) => {
+app.post('/api/run-test', verifyToken, async (req, res) => {
   const { steps } = req.body;
 
   if (!steps || !Array.isArray(steps) || steps.length === 0) {

@@ -8,24 +8,17 @@ if (!fs.existsSync(TRACES_DIR)) {
   fs.mkdirSync(TRACES_DIR, { recursive: true });
 }
 
-const DEFAULT_TIMEOUT = 15000;
-
-async function waitForPageStable(page, timeout = DEFAULT_TIMEOUT) {
-  try {
-    await page.waitForLoadState('networkidle', { timeout });
-  } catch {
-    try {
-      await page.waitForLoadState('domcontentloaded', { timeout: DEFAULT_TIMEOUT });
-    } catch {
-      // ignore
-    }
-  }
-  await new Promise((r) => setTimeout(r, 300));
-}
+const DEFAULT_TIMEOUT = parseInt(process.env.PLAYWRIGHT_TIMEOUT, 10) || 15000;
+const NAV_TIMEOUT = parseInt(process.env.PLAYWRIGHT_NAV_TIMEOUT, 10) || 45000;
+const ENABLE_TRACING = process.env.ENABLE_TRACING === 'true';
 
 async function captureStepScreenshot(page) {
-  await waitForPageStable(page, 8000);
-  const buf = await page.screenshot({ type: 'png', fullPage: true });
+  const buf = await page.screenshot({
+    type: 'jpeg',
+    quality: 60,
+    fullPage: false,
+    timeout: 5000,
+  });
   return buf.toString('base64');
 }
 
@@ -33,7 +26,10 @@ async function executeSteps(steps) {
   const traceId = `trace-${Date.now()}`;
   console.log(`[stepExecutor] Starting execution of ${steps.length} steps (${traceId})`);
 
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--disable-dev-shm-usage', '--no-sandbox'],
+  });
   const context = await browser.newContext({
     viewport: { width: 1280, height: 720 },
   });
@@ -41,7 +37,9 @@ async function executeSteps(steps) {
 
   page.setDefaultTimeout(DEFAULT_TIMEOUT);
 
-  await context.tracing.start({ screenshots: true, snapshots: true });
+  if (ENABLE_TRACING) {
+    await context.tracing.start({ screenshots: true, snapshots: true });
+  }
 
   const results = [];
 
@@ -78,17 +76,27 @@ async function executeSteps(steps) {
     }
   }
 
-  const tracePath = path.join(TRACES_DIR, `${traceId}.zip`);
-  await context.tracing.stop({ path: tracePath });
+  if (ENABLE_TRACING) {
+    const tracePath = path.join(TRACES_DIR, `${traceId}.zip`);
+    await context.tracing.stop({ path: tracePath });
+  }
   await browser.close();
 
-  return { results, traceId };
+  return { results, traceId: ENABLE_TRACING ? traceId : null };
 }
 
-async function executeStep(page, context, step) {
-  const { text, config } = step;
+const STEPS_WITHOUT_CONFIG = new Set([
+  'Close Tab',
+  'Go Back',
+  'Go Forward',
+  'Refresh Page',
+]);
 
-  if (!config || Object.keys(config).length === 0) {
+async function executeStep(page, context, step) {
+  const { text, config: rawConfig } = step;
+  const config = rawConfig || {};
+
+  if (!STEPS_WITHOUT_CONFIG.has(text) && Object.keys(config).length === 0) {
     throw new Error(`Step "${text}" has no configuration`);
   }
 
@@ -97,9 +105,9 @@ async function executeStep(page, context, step) {
       if (!config.url || config.url.trim() === '') {
         throw new Error('URL is required for Navigate step');
       }
-      const waitUntil = config.waitUntil || 'load';
-      await page.goto(config.url, { waitUntil, timeout: DEFAULT_TIMEOUT });
-      await waitForPageStable(page);
+      // domcontentloaded is faster; use "load" only for simple static pages
+      const waitUntil = config.waitUntil || 'domcontentloaded';
+      await page.goto(config.url, { waitUntil, timeout: NAV_TIMEOUT });
       break;
     }
 
@@ -116,7 +124,6 @@ async function executeStep(page, context, step) {
       } else {
         await el.click();
       }
-      await waitForPageStable(page);
       break;
     }
 
@@ -128,28 +135,9 @@ async function executeStep(page, context, step) {
       break;
     }
 
+    case "Assert Element":
     case "Assert Text": {
-      requireSelector(config);
-      const el = getElement(page, config.selectorType, config.selectorValue, config.additionalFilter, config.additionalFilterValue);
-      await el.waitFor({ state: 'attached', timeout: DEFAULT_TIMEOUT });
-      switch (config.assertionType) {
-        case 'toBeVisible':
-          if (!await el.isVisible()) throw new Error(`Element "${config.selectorValue}" is not visible`);
-          break;
-        case 'toHaveText':
-          const actualText = await el.textContent();
-          if (actualText !== config.expectedValue)
-            throw new Error(`Expected text "${config.expectedValue}", got "${actualText}"`);
-          break;
-        case 'toContainText':
-          const containsText = await el.textContent();
-          if (!containsText.includes(config.expectedValue))
-            throw new Error(`Text does not contain "${config.expectedValue}"`);
-          break;
-        case 'toBeHidden':
-          if (await el.isVisible()) throw new Error(`Element "${config.selectorValue}" is visible but expected hidden`);
-          break;
-      }
+      await runAssertion(page, config);
       break;
     }
 
@@ -338,6 +326,112 @@ async function assertLocatorMatches(el, config) {
   }
 }
 
+async function runAssertion(page, config) {
+  const type = config.assertionType || 'toBeVisible';
+  const expected = config.expectedValue ?? '';
+
+  if (type === 'toHaveURL') {
+    const url = page.url();
+    if (!url.includes(expected) && url !== expected) {
+      throw new Error(`Expected URL to contain "${expected}", got "${url}"`);
+    }
+    return;
+  }
+
+  if (type === 'toHaveTitle') {
+    const title = await page.title();
+    if (!title.includes(expected)) {
+      throw new Error(`Expected title to contain "${expected}", got "${title}"`);
+    }
+    return;
+  }
+
+  requireSelector(config);
+  const el = getElement(page, config.selectorType, config.selectorValue, config.additionalFilter, config.additionalFilterValue);
+  await el.first().waitFor({ state: 'attached', timeout: DEFAULT_TIMEOUT });
+
+  switch (type) {
+    case 'toBeVisible':
+      if (!(await el.first().isVisible())) {
+        throw new Error(`Element "${config.selectorValue}" is not visible`);
+      }
+      break;
+    case 'toBeHidden':
+      if (await el.first().isVisible()) {
+        throw new Error(`Element "${config.selectorValue}" is visible but expected hidden`);
+      }
+      break;
+    case 'toBeEnabled':
+      if (!(await el.first().isEnabled())) {
+        throw new Error(`Element "${config.selectorValue}" is not enabled`);
+      }
+      break;
+    case 'toBeDisabled':
+      if (await el.first().isEnabled()) {
+        throw new Error(`Element "${config.selectorValue}" is not disabled`);
+      }
+      break;
+    case 'toBeChecked':
+      if (!(await el.first().isChecked())) {
+        throw new Error(`Element "${config.selectorValue}" is not checked`);
+      }
+      break;
+    case 'toBeEmpty': {
+      const val = await el.first().inputValue().catch(() => '');
+      const text = (await el.first().textContent()) || '';
+      if (val !== '' || text.trim() !== '') {
+        throw new Error(`Element "${config.selectorValue}" is not empty`);
+      }
+      break;
+    }
+    case 'toHaveText': {
+      const actualText = (await el.first().textContent()) || '';
+      if (actualText.trim() !== expected.trim()) {
+        throw new Error(`Expected text "${expected}", got "${actualText.trim()}"`);
+      }
+      break;
+    }
+    case 'toContainText': {
+      const text = (await el.first().textContent()) || '';
+      if (!text.includes(expected)) {
+        throw new Error(`Text does not contain "${expected}"`);
+      }
+      break;
+    }
+    case 'toHaveValue': {
+      const value = await el.first().inputValue();
+      if (value !== expected) {
+        throw new Error(`Expected value "${expected}", got "${value}"`);
+      }
+      break;
+    }
+    case 'toHaveAttribute': {
+      const [attr, attrVal] = expected.includes('=')
+        ? expected.split('=').map((s) => s.trim())
+        : [expected, null];
+      if (!attr) throw new Error('Expected attribute format: name=value');
+      const actual = await el.first().getAttribute(attr);
+      if (attrVal !== null && actual !== attrVal) {
+        throw new Error(`Expected attribute ${attr}="${attrVal}", got "${actual}"`);
+      }
+      if (attrVal === null && actual === null) {
+        throw new Error(`Attribute "${attr}" not found`);
+      }
+      break;
+    }
+    case 'toHaveCount': {
+      const count = await el.count();
+      const expectedCount = parseInt(expected, 10);
+      if (count !== expectedCount) {
+        throw new Error(`Expected count ${expectedCount}, got ${count}`);
+      }
+      break;
+    }
+    default:
+      throw new Error(`Unknown assertion type: "${type}"`);
+  }
+}
+
 function getElement(page, selectorType, value, filterType, filterValue) {
   let el;
   switch (selectorType) {
@@ -345,6 +439,8 @@ function getElement(page, selectorType, value, filterType, filterValue) {
     case "getByText":        el = page.getByText(value); break;
     case "getByLabel":       el = page.getByLabel(value); break;
     case "getByPlaceholder": el = page.getByPlaceholder(value); break;
+    case "getByAltText":     el = page.getByAltText(value); break;
+    case "getByTitle":       el = page.getByTitle(value); break;
     case "getByTestId":      el = page.getByTestId(value); break;
     case "CSS Selector":     el = page.locator(value); break;
     case "XPath":            el = page.locator(`xpath=${value}`); break;
