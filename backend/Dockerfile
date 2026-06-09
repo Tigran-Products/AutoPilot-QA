@@ -10,6 +10,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npx playwright install chromium
 
 COPY server.js stepExecutor.js ./
+COPY middleware/ ./middleware/
 
 EXPOSE 3001
 
