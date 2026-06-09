@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { apiUrl } from '../config/api';
+import { isStepConfigured } from '../StepConfigs';
 
 export default function Dashboard({ addedSteps, onRunTest, results, isRunning }) {
   const [expandedScreenshot, setExpandedScreenshot] = useState(null);
 
   const hasSteps = addedSteps && addedSteps.length > 0;
   const configuredCount = hasSteps
-    ? addedSteps.filter(s => Object.keys(s.config).length > 0).length
+    ? addedSteps.filter(s => isStepConfigured(s.text, s.config)).length
     : 0;
 
   function handleDownloadTrace() {
@@ -44,7 +45,7 @@ export default function Dashboard({ addedSteps, onRunTest, results, isRunning })
                 <div
                   key={step.id}
                   className={`w-2 h-2 rounded-full ${
-                    Object.keys(step.config).length > 0 ? "bg-emerald-400" : "bg-slate-600"
+                    isStepConfigured(step.text, step.config) ? "bg-emerald-400" : "bg-slate-600"
                   }`}
                   title={step.text}
                 />
@@ -52,10 +53,13 @@ export default function Dashboard({ addedSteps, onRunTest, results, isRunning })
             </div>
           )}
 
-          {isRunning && (
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-              <span className="text-xs text-slate-400">Executing...</span>
+              {isRunning && (
+            <div className="flex flex-col gap-0.5">
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-xs text-slate-400">Executing on server...</span>
+              </div>
+              <span className="text-xs text-slate-500 ml-6">First run after idle may take 30–60s (Render waking up).</span>
             </div>
           )}
         </div>
@@ -161,7 +165,7 @@ export default function Dashboard({ addedSteps, onRunTest, results, isRunning })
                             className="group relative block rounded overflow-hidden border border-slate-700 hover:border-indigo-500 transition-colors"
                           >
                             <img
-                              src={`data:image/png;base64,${result.screenshot}`}
+                              src={`data:image/jpeg;base64,${result.screenshot}`}
                               alt={`Screenshot after step ${result.step}`}
                               className="w-48 h-auto"
                             />
@@ -198,7 +202,7 @@ export default function Dashboard({ addedSteps, onRunTest, results, isRunning })
               </svg>
             </button>
             <img
-              src={`data:image/png;base64,${expandedScreenshot}`}
+              src={`data:image/jpeg;base64,${expandedScreenshot}`}
               alt="Expanded screenshot"
               className="max-w-[90vw] max-h-[90vh] rounded-lg shadow-2xl border border-slate-600"
             />

@@ -1,7 +1,21 @@
-import STEP_CONFIGS, { FILTER_OPTIONS } from '../StepConfigs';
+import STEP_CONFIGS, { FILTER_OPTIONS, ASSERTION_OPTIONS } from '../StepConfigs';
 import ConfigInput from './ConfigInput';
 import ConfigSelect from './ConfigSelect';
 import { useState } from 'react';
+
+function assertionMeta(type) {
+  return ASSERTION_OPTIONS.find((a) => a.value === type) || ASSERTION_OPTIONS[0];
+}
+
+function shouldShowField(field, localConfig) {
+  if (!field.showWhen) return true;
+  const { field: depField, notPageLevel, needsValue } = field.showWhen;
+  const depValue = localConfig[depField];
+  const meta = assertionMeta(depValue);
+  if (notPageLevel && meta.pageLevel) return false;
+  if (needsValue && !meta.needsValue) return false;
+  return true;
+}
 
 function StepConfig({ step, onConfigChange }) {
   const stepConfig = STEP_CONFIGS[step.text];
@@ -14,10 +28,23 @@ function StepConfig({ step, onConfigChange }) {
       if (!value) {
         delete updated.additionalFilterValue;
       } else {
-        const opt = FILTER_OPTIONS.find(o => o.value === value);
+        const opt = FILTER_OPTIONS.find((o) => o.value === value);
         if (opt && !opt.needsValue) {
           delete updated.additionalFilterValue;
         }
+      }
+    }
+
+    if (fieldName === 'assertionType') {
+      const meta = assertionMeta(value);
+      if (meta.pageLevel) {
+        delete updated.selectorType;
+        delete updated.selectorValue;
+        delete updated.additionalFilter;
+        delete updated.additionalFilterValue;
+      }
+      if (!meta.needsValue) {
+        delete updated.expectedValue;
       }
     }
 
@@ -31,13 +58,14 @@ function StepConfig({ step, onConfigChange }) {
         <div className="border-b border-slate-700 pb-3 mb-4">
           <h3 className="text-sm font-semibold text-white">{step.text}</h3>
         </div>
-        <p className="text-xs text-slate-400">No configuration needed for this step.</p>
+        <p className="text-xs text-slate-400">No configuration needed — ready to run.</p>
       </div>
     );
   }
 
   const selectedFilter = localConfig.additionalFilter || '';
-  const selectedFilterOption = FILTER_OPTIONS.find(o => o.value === selectedFilter);
+  const selectedFilterOption = FILTER_OPTIONS.find((o) => o.value === selectedFilter);
+  const assertMeta = assertionMeta(localConfig.assertionType);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -48,6 +76,14 @@ function StepConfig({ step, onConfigChange }) {
 
       <div className="flex-1 overflow-y-auto p-5 space-y-4">
         {stepConfig.fields.map((field) => {
+          if (!shouldShowField(field, localConfig)) {
+            return null;
+          }
+
+          if (field.type === 'filter' && assertMeta.pageLevel) {
+            return null;
+          }
+
           if (field.type === 'filter') {
             return (
               <div key={field.name} className="space-y-3">
@@ -66,7 +102,7 @@ function StepConfig({ step, onConfigChange }) {
                   </select>
                 </div>
 
-                {selectedFilterOption && selectedFilterOption.needsValue && (
+                {selectedFilterOption?.needsValue && (
                   <div>
                     <label className="block text-xs font-medium text-slate-300 mb-1.5">
                       Filter Value
@@ -84,14 +120,16 @@ function StepConfig({ step, onConfigChange }) {
             );
           }
 
+          const assertFieldMeta = field.name === 'expectedValue' ? assertMeta : null;
+
           return (
             <div key={field.name}>
               {(field.type === 'text' || field.type === 'number') && (
                 <ConfigInput
                   label={field.label}
-                  type={field.type}
-                  placeholder={field.placeholder}
-                  required={field.required}
+                  type={assertFieldMeta?.valueType || field.type}
+                  placeholder={assertFieldMeta?.placeholder || field.placeholder}
+                  required={assertMeta.needsValue && field.name === 'expectedValue'}
                   value={localConfig[field.name] || ''}
                   onChange={(value) => handleFieldChange(field.name, value)}
                 />
@@ -100,7 +138,7 @@ function StepConfig({ step, onConfigChange }) {
                 <ConfigSelect
                   label={field.label}
                   options={field.options}
-                  value={localConfig[field.name] || field.default}
+                  value={localConfig[field.name] ?? field.default ?? ''}
                   onChange={(value) => handleFieldChange(field.name, value)}
                 />
               )}

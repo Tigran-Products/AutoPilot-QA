@@ -1,21 +1,49 @@
 import Sidebar from './components/Sidebar';
 import BuilderArea from './components/BuilderArea';
 import Dashboard from './components/Dashboard';
+import AuthPage from './components/auth/AuthPage';
 import { apiUrl } from './config/api';
-import { useState } from 'react';
+import { getDefaultConfig, isStepConfigured } from './StepConfigs';
+import { useState, useEffect } from 'react';
+import { useAuth } from './context/AuthContext';
+
+const STORAGE_KEY = 'savedTests';
 
 function App() {
-  const [addedSteps, setAddedSteps] = useState([]);
-  const [savedTests, setSavedTests] = useState([]);
-  const [testResults, setTestResults] = useState(null);
-  const [isRunning, setIsRunning] = useState(false);
+  const { user, loading } = useAuth();
+
+  const [addedSteps,   setAddedSteps]   = useState([]);
+  const [savedTests,   setSavedTests]   = useState([]);
+  const [testResults,  setTestResults]  = useState(null);
+  const [isRunning,    setIsRunning]    = useState(false);
+  const [storageReady, setStorageReady] = useState(false);
+
+  // Load saved tests from localStorage on mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) setSavedTests(parsed);
+      }
+    } catch {
+      setSavedTests([]);
+    }
+    setStorageReady(true);
+  }, []);
+
+  // Persist saved tests to localStorage
+  useEffect(() => {
+    if (!storageReady) return;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(savedTests));
+  }, [savedTests, storageReady]);
 
   async function handleRunTest() {
-    const unconfigured = addedSteps.filter(s => Object.keys(s.config).length === 0);
+    const unconfigured = addedSteps.filter(s => !isStepConfigured(s.text, s.config));
     if (unconfigured.length > 0) {
       setTestResults({
         success: false,
-        error: `${unconfigured.length} step(s) have no configuration. Configure all steps before running.`,
+        error: `${unconfigured.length} step(s) are missing required configuration: ${unconfigured.map(s => s.text).join(', ')}.`,
         totalSteps: addedSteps.length,
         executedSteps: 0,
         results: []
@@ -25,18 +53,22 @@ function App() {
 
     setIsRunning(true);
     setTestResults(null);
-    
+
     try {
+      const token   = await user.getIdToken();
       const payload = addedSteps.map(step => ({ text: step.text, config: step.config }));
-      
+
       const response = await fetch(apiUrl('/api/run-test'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
         body: JSON.stringify({ steps: payload })
       });
-      
+
       const result = await response.json();
-      
+
       if (!response.ok) {
         setTestResults({
           success: false,
@@ -65,7 +97,7 @@ function App() {
     const newStep = {
       ...step,
       id: Date.now() + Math.random(),
-      config: {}
+      config: getDefaultConfig(step.text),
     };
     setAddedSteps(prev => [...prev, newStep]);
   }
@@ -84,8 +116,14 @@ function App() {
 
   function handleSaveTest() {
     if (addedSteps.length === 0) return;
-    const testName = `Test ${savedTests.length + 1}`;
-    setSavedTests(prev => [...prev, { id: Date.now(), name: testName, steps: addedSteps }]);
+    const snapshot = addedSteps.map((step) => ({
+      ...step,
+      config: { ...step.config },
+    }));
+    setSavedTests((prev) => {
+      const testName = `Test ${prev.length + 1}`;
+      return [...prev, { id: Date.now(), name: testName, steps: snapshot }];
+    });
   }
 
   function handleLoadTest(savedTest) {
@@ -93,11 +131,27 @@ function App() {
   }
 
   function handleDeleteSavedTest(testId) {
-    setSavedTests(prev => prev.filter(t => t.id !== testId));
+    setSavedTests((prev) => prev.filter((t) => t.id !== testId));
   }
 
-  
+  // ── Loading spinner while Firebase resolves auth state ────────────────────────
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+          <p className="text-xs text-slate-400">Loading…</p>
+        </div>
+      </div>
+    );
+  }
 
+  // ── Not signed in → show auth page ───────────────────────────────────────────
+  if (!user) {
+    return <AuthPage />;
+  }
+
+  // ── Main app ──────────────────────────────────────────────────────────────────
   return (
     <div className="flex h-screen bg-slate-900">
       <Sidebar
@@ -113,7 +167,12 @@ function App() {
           onRemoveStep={handleRemoveStep}
           onSaveTest={handleSaveTest}
         />
-        <Dashboard addedSteps={addedSteps} onRunTest={handleRunTest} results={testResults} isRunning={isRunning} />
+        <Dashboard
+          addedSteps={addedSteps}
+          onRunTest={handleRunTest}
+          results={testResults}
+          isRunning={isRunning}
+        />
       </main>
     </div>
   );
