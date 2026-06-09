@@ -1,5 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
+import { getFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey:            import.meta.env.VITE_FIREBASE_API_KEY,
@@ -10,6 +11,22 @@ const firebaseConfig = {
   appId:             import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-const app  = initializeApp(firebaseConfig);
-export const auth = getAuth(app);
+// Prevents a hard crash (auth/invalid-api-key) when .env keys are missing.
+export const firebaseConfigured = Boolean(
+  firebaseConfig.apiKey && firebaseConfig.authDomain && firebaseConfig.projectId
+);
+
+let auth = null;
+let db   = null;
+let app  = null;
+
+if (firebaseConfigured) {
+  app  = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db   = getFirestore(app);
+} else {
+  console.error('[Firebase] Missing config. Fill in VITE_FIREBASE_* in frontend/.env and restart.');
+}
+
+export { auth, db };
 export default app;

@@ -4,40 +4,69 @@ import Dashboard from './components/Dashboard';
 import AuthPage from './components/auth/AuthPage';
 import { apiUrl } from './config/api';
 import { getDefaultConfig, isStepConfigured } from './StepConfigs';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from './context/AuthContext';
+import { fetchTests, saveTest, deleteTest } from './services/firestore';
 
-const STORAGE_KEY = 'savedTests';
+function cacheKey(uid) {
+  return `savedTests_${uid}`;
+}
+
+function loadFromCache(uid) {
+  try {
+    const raw = localStorage.getItem(cacheKey(uid));
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return [];
+}
+
+function writeToCache(uid, tests) {
+  try {
+    localStorage.setItem(cacheKey(uid), JSON.stringify(tests));
+  } catch {}
+}
 
 function App() {
   const { user, loading } = useAuth();
 
-  const [addedSteps,   setAddedSteps]   = useState([]);
-  const [savedTests,   setSavedTests]   = useState([]);
-  const [testResults,  setTestResults]  = useState(null);
-  const [isRunning,    setIsRunning]    = useState(false);
-  const [storageReady, setStorageReady] = useState(false);
+  const [addedSteps,  setAddedSteps]  = useState([]);
+  const [savedTests,  setSavedTests]  = useState([]);
+  const [testResults, setTestResults] = useState(null);
+  const [isRunning,   setIsRunning]   = useState(false);
 
-  // Load saved tests from localStorage on mount
+  // Track whether we've already synced Firestore for the current user
+  const syncedUidRef = useRef(null);
+
+  // When user signs in: load from cache immediately, then hydrate from Firestore
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) setSavedTests(parsed);
-      }
-    } catch {
+    if (!user) {
       setSavedTests([]);
+      syncedUidRef.current = null;
+      return;
     }
-    setStorageReady(true);
-  }, []);
+    if (syncedUidRef.current === user.uid) return;
+    syncedUidRef.current = user.uid;
 
-  // Persist saved tests to localStorage
-  useEffect(() => {
-    if (!storageReady) return;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(savedTests));
-  }, [savedTests, storageReady]);
+    // 1. Instant load from localStorage cache
+    const cached = loadFromCache(user.uid);
+    setSavedTests(cached);
 
+    // 2. Background fetch from Firestore → replace cache
+    fetchTests(user.uid)
+      .then((tests) => {
+        setSavedTests(tests);
+        writeToCache(user.uid, tests);
+      })
+      .catch((err) => {
+        console.error('Firestore fetch error:', err.message);
+        // Cache already shown — keep it as fallback
+      });
+  }, [user]);
+
+  // ── Run test ─────────────────────────────────────────────────────────────────
   async function handleRunTest() {
     const unconfigured = addedSteps.filter(s => !isStepConfigured(s.text, s.config));
     if (unconfigured.length > 0) {
@@ -93,20 +122,18 @@ function App() {
     }
   }
 
+  // ── Step management ───────────────────────────────────────────────────────────
   function handleAddStep(step) {
-    const newStep = {
+    setAddedSteps(prev => [...prev, {
       ...step,
       id: Date.now() + Math.random(),
       config: getDefaultConfig(step.text),
-    };
-    setAddedSteps(prev => [...prev, newStep]);
+    }]);
   }
 
   function handleUpdateStepConfig(stepId, config) {
     setAddedSteps(prev => prev.map(step =>
-      step.id === stepId
-        ? { ...step, config: { ...step.config, ...config } }
-        : step
+      step.id === stepId ? { ...step, config: { ...step.config, ...config } } : step
     ));
   }
 
@@ -114,27 +141,55 @@ function App() {
     setAddedSteps(prev => prev.filter(step => step.id !== stepId));
   }
 
-  function handleSaveTest() {
-    if (addedSteps.length === 0) return;
-    const snapshot = addedSteps.map((step) => ({
-      ...step,
-      config: { ...step.config },
-    }));
-    setSavedTests((prev) => {
-      const testName = `Test ${prev.length + 1}`;
-      return [...prev, { id: Date.now(), name: testName, steps: snapshot }];
-    });
+  // ── Saved test management (Firestore + cache) ────────────────────────────────
+  async function handleSaveTest() {
+    if (addedSteps.length === 0 || !user) return;
+
+    const newTest = {
+      id: Date.now(),
+      name: `Test ${savedTests.length + 1}`,
+      createdAt: Date.now(),
+      steps: addedSteps.map(s => ({ ...s, config: { ...s.config } })),
+    };
+
+    // Optimistic update
+    const updated = [...savedTests, newTest];
+    setSavedTests(updated);
+    writeToCache(user.uid, updated);
+
+    try {
+      await saveTest(user.uid, newTest);
+    } catch (err) {
+      console.error('Failed to save test to Firestore:', err.message);
+      // Rollback
+      setSavedTests(savedTests);
+      writeToCache(user.uid, savedTests);
+    }
   }
 
   function handleLoadTest(savedTest) {
     setAddedSteps(savedTest.steps);
   }
 
-  function handleDeleteSavedTest(testId) {
-    setSavedTests((prev) => prev.filter((t) => t.id !== testId));
+  async function handleDeleteSavedTest(testId) {
+    if (!user) return;
+
+    // Optimistic update
+    const updated = savedTests.filter(t => t.id !== testId);
+    setSavedTests(updated);
+    writeToCache(user.uid, updated);
+
+    try {
+      await deleteTest(user.uid, testId);
+    } catch (err) {
+      console.error('Failed to delete test from Firestore:', err.message);
+      // Rollback
+      setSavedTests(savedTests);
+      writeToCache(user.uid, savedTests);
+    }
   }
 
-  // ── Loading spinner while Firebase resolves auth state ────────────────────────
+  // ── Auth loading spinner ──────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center">
@@ -146,12 +201,8 @@ function App() {
     );
   }
 
-  // ── Not signed in → show auth page ───────────────────────────────────────────
-  if (!user) {
-    return <AuthPage />;
-  }
+  if (!user) return <AuthPage />;
 
-  // ── Main app ──────────────────────────────────────────────────────────────────
   return (
     <div className="flex h-screen bg-slate-900">
       <Sidebar

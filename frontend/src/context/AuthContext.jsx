@@ -9,15 +9,16 @@ import {
   multiFactor,
   TotpMultiFactorGenerator,
 } from 'firebase/auth';
-import { auth } from '../config/firebase';
+import { auth, firebaseConfigured } from '../config/firebase';
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser]       = useState(undefined); // undefined = loading
-  const [mfaResolver, setMfaResolver] = useState(null); // set when login needs 2FA
+  const [user, setUser]           = useState(firebaseConfigured ? undefined : null);
+  const [mfaResolver, setMfaResolver] = useState(null);
 
   useEffect(() => {
+    if (!firebaseConfigured) return;
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       setUser(firebaseUser ?? null);
     });
