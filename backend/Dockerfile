@@ -11,6 +11,7 @@ RUN npm ci --omit=dev && npx playwright install chromium
 
 COPY server.js stepExecutor.js ./
 COPY middleware/ ./middleware/
+COPY services/ ./services/
 
 EXPOSE 3001
 
