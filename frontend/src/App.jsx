@@ -7,6 +7,7 @@ import { getDefaultConfig, isStepConfigured } from './StepConfigs';
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from './context/AuthContext';
 import { fetchTests, saveTest, deleteTest } from './services/firestore';
+import { indexTest, deleteTestFromIndex, bulkIndexTests } from './services/algolia';
 
 function cacheKey(uid) {
   return `savedTests_${uid}`;
@@ -54,11 +55,13 @@ function App() {
     const cached = loadFromCache(user.uid);
     setSavedTests(cached);
 
-    // 2. Background fetch from Firestore → replace cache
+    // 2. Background fetch from Firestore → replace cache & bulk index in Algolia
     fetchTests(user.uid)
       .then((tests) => {
         setSavedTests(tests);
         writeToCache(user.uid, tests);
+        // Sync all tests to Algolia
+        bulkIndexTests(user.uid, tests);
       })
       .catch((err) => {
         console.error('Firestore fetch error:', err.message);
@@ -141,7 +144,7 @@ function App() {
     setAddedSteps(prev => prev.filter(step => step.id !== stepId));
   }
 
-  // ── Saved test management (Firestore + cache) ────────────────────────────────
+  // ── Saved test management (Firestore + cache + Algolia) ─────────────────────
   async function handleSaveTest() {
     if (addedSteps.length === 0 || !user) return;
 
@@ -159,6 +162,8 @@ function App() {
 
     try {
       await saveTest(user.uid, newTest);
+      // Index in Algolia after Firestore success
+      indexTest(user.uid, newTest);
     } catch (err) {
       console.error('Failed to save test to Firestore:', err.message);
       // Rollback
@@ -181,6 +186,8 @@ function App() {
 
     try {
       await deleteTest(user.uid, testId);
+      // Remove from Algolia after Firestore success
+      deleteTestFromIndex(user.uid, testId);
     } catch (err) {
       console.error('Failed to delete test from Firestore:', err.message);
       // Rollback
