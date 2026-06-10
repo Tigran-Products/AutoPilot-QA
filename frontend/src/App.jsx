@@ -125,6 +125,48 @@ function App() {
     }
   }
 
+  // ── AI self-healing ───────────────────────────────────────────────────────────
+  async function handleAnalyzeTest(steps, results) {
+    const token = await user.getIdToken();
+    const response = await fetch(apiUrl('/api/analyze-test'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({ steps, results }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'Analysis failed');
+    return data;
+  }
+
+  async function handleApplyFixes(steps, suggestions) {
+    const token = await user.getIdToken();
+    const response = await fetch(apiUrl('/api/apply-fixes'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({ steps, suggestions }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'Apply fixes failed');
+
+    // Merge fixed steps back into the builder (preserve IDs/config structure)
+    if (data.fixedSteps) {
+      setAddedSteps(prev =>
+        prev.map((step, i) =>
+          data.fixedSteps[i]
+            ? { ...step, config: { ...step.config, ...data.fixedSteps[i].config } }
+            : step
+        )
+      );
+    }
+    setTestResults(data);
+  }
+
   // ── Step management ───────────────────────────────────────────────────────────
   function handleAddStep(step) {
     setAddedSteps(prev => [...prev, {
@@ -230,6 +272,8 @@ function App() {
           onRunTest={handleRunTest}
           results={testResults}
           isRunning={isRunning}
+          onAnalyzeTest={handleAnalyzeTest}
+          onApplyFixes={handleApplyFixes}
         />
       </main>
     </div>
